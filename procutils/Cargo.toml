@@ -1,3 +1,9 @@
+# Copyright (c) <2024>, <🌟夕元><🌟VEA>
+# All Rights Reserved
+# 
+# This file is part of <PROJECT_NAME> distributed under the BSD 3-Clause License. 
+# See the LICENSE file at the root directory of this project for more details.
+
 [package]
 name = "procutils"
 version = "0.1.0"
@@ -6,3 +12,4 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+libc = "0.2.152"
