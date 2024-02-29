@@ -89,7 +89,6 @@ struct RecordItem {
     global_stime: f64,
     global_total_cpu_time: f64,
     cpu_occupancy_rate: f64,
-    per_cpu_occupancy_rate: f64,
     priority: i64,
     nice: i64,
     num_threads: i64,
