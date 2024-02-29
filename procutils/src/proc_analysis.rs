@@ -14,20 +14,30 @@ use std::str::from_utf8;
 use std::time::Duration;
 
 // Procfs some path
-const PROC_FS_PATH: &str = "/proc";
 const GLOBAL_SYSTEM_INFO: &str = "/proc/stat";
 
 // We need string literal to format String
+/// Declare an string
 #[macro_export]
 macro_rules! TASK_STATUS_TEMPLATE { () => { "/proc/{}/status" } }
+
+/// Declare an string
 #[macro_export]
 macro_rules! TASK_STAT_TEMPLATE { () => { "/proc/{}/stat" } }
+
+/// Declare an string
 #[macro_export]
 macro_rules! SUBTASK_PATH_TEMPLATE { () => { "/proc/{}/task" } }
+
+/// Declare an string
 #[macro_export]
 macro_rules! TASK_STATUS_TID_TEMPLATE { () => { "/proc/{}/task/{}/status" } }
+
+/// Declare an string
 #[macro_export]
 macro_rules! TASK_STAT_TID_TEMPLATE { () => { "/proc/{}/task/{}/stat" } }
+
+/// Declare an string
 #[macro_export]
 macro_rules! TASK_SMAPS_PID_TEMPLATE { () => { "/proc/{}/smaps" }; }
 
@@ -40,7 +50,7 @@ const TASK_VM_SWAP_PREFIX: &str = "VmSwap:\t";
 const TASK_PSS_PREFIX: &str = "Pss:\t";
 const TASK_VOLUNTARY_SWITCH_PREFIX: &str = "voluntary_ctxt_switches:\t";
 const TASK_NONVOLUNTARY_SWITCH_PREFIX: &str = "nonvoluntary_ctxt_switches:\t";
-const GLOBAL_CPU_STAT_PREFIX: &'static str = "cpu "; // static mark global lifecycle
+const GLOBAL_CPU_STAT_PREFIX: &str = "cpu "; // static mark global lifecycle
 
 macro_rules! OUTPUT_FILE_TEMPLATE { () => { "resource_trace_{}.csv" }; }
 
@@ -79,6 +89,7 @@ struct RecordItem {
     global_stime: f64,
     global_total_cpu_time: f64,
     cpu_occupancy_rate: f64,
+    per_cpu_occupancy_rate: f64,
     priority: i64,
     nice: i64,
     num_threads: i64,
@@ -93,7 +104,7 @@ struct RecordProcess {
 
 fn dump_csv_info(record: &RecordProcess, process_name: &str) {
     let out_path = format!(OUTPUT_FILE_TEMPLATE!(), process_name);
-    let mut out = File::create(&out_path).expect(&format!("Open file {} failed!", out_path));
+    let mut out = File::create(&out_path).unwrap_or_else(|_| panic!("Open file {} failed!", out_path));
     match write!(out, "time,pss,vmRss,vmAnon,vmFile,vmShmem,vmSwap,voluntaryCtxtSwitches,nonvoluntaryCtxtSwitches,minflt,\
             majflt,utime,stime,totalcputime,gutime,gstime,gtotalcputime,cpuOccupancyRate,priority,nice,numThreads,startTime \r\n") {
         Ok(_) => {},
@@ -102,7 +113,7 @@ fn dump_csv_info(record: &RecordProcess, process_name: &str) {
         },
     }
     for item in &record.record_infos {
-        match write!(out, "{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{} \r\n",
+        match write!(out, "{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.5},{},{},{},{} \r\n",
                 item.timestamp, item.pss, item.vm_rss, item.vm_anon, item.vm_file, item.vm_shmem,
                 item.vm_swap, item.voluntary_ctxt_switches, item.nonvoluntary_ctxt_switches,
                 item.minflt, item.majflt, item.utime, item.stime, item.totalcputime, item.global_utime,
@@ -139,7 +150,7 @@ fn get_process_pid(chr: &str) -> pid_t {
 fn get_pss_info(item: &mut RecordItem, pid: pid_t) {
     let path = format!(TASK_SMAPS_PID_TEMPLATE!(), pid);
     let content = read_path(&path)
-            .expect(&format!("Read path {} failed!", path));
+            .unwrap_or_else(|_| panic!("Read path {} failed!", path));
     let lines = content.lines();
 
     for line in lines {
@@ -150,18 +161,15 @@ fn get_pss_info(item: &mut RecordItem, pid: pid_t) {
                 .trim_start_matches(TASK_PSS_PREFIX)
                 .trim_end_matches(" kB")
                 .trim();
-        match number_part.parse::<isize>() {
-            Ok(number) => {
-                item.pss += number;
-            }
-            Err(_) => {}
+        if let Ok(number) = number_part.parse::<isize>() {
+            item.pss += number;
         }
     }
 }
 
 fn get_global_cpu_info(item: &mut RecordItem) {
     let content = read_path(GLOBAL_SYSTEM_INFO)
-            .expect(&format!("Read path {} failed!", GLOBAL_SYSTEM_INFO));
+            .unwrap_or_else(|_| panic!("Read path {} failed!", GLOBAL_SYSTEM_INFO));
     let lines = content.lines();
     for line in lines {
         if !line.starts_with(GLOBAL_CPU_STAT_PREFIX) {
@@ -170,12 +178,15 @@ fn get_global_cpu_info(item: &mut RecordItem) {
         let temp_str = line.trim_start_matches(GLOBAL_CPU_STAT_PREFIX)
                 .trim();
         let process_stat_strs: Vec<&str> = temp_str.split_whitespace().collect();
+        // SAFETY:
+        // Safe because we've verified that the system call returns correctly
+        let clock_ticks = unsafe { sysconf(_SC_CLK_TCK) as f64 };
         item.global_utime += process_stat_strs[SYSTEM_GLOBAL_USER_TIME_SHIFT]
                 .parse::<f64>()
-                .unwrap_or(0.0) / unsafe { sysconf(_SC_CLK_TCK) as f64 };
+                .unwrap_or(0.0) / clock_ticks;
         item.global_stime += process_stat_strs[SYSTEM_GLOBAL_SYSTEM_TIME_SHIFT]
                 .parse::<f64>()
-                .unwrap_or(0.0) / unsafe { sysconf(_SC_CLK_TCK) as f64 };
+                .unwrap_or(0.0) / clock_ticks;
     }
     item.global_total_cpu_time = item.global_stime + item.global_utime;
 }
@@ -198,7 +209,7 @@ fn monitor_thread(monitor_time: i64, monitor_iterval: i64,
         get_global_cpu_info(&mut record_item);
         get_pss_info(&mut record_item, record_process.pid);
         for entry in fs::read_dir(format!(SUBTASK_PATH_TEMPLATE!(), record_process.pid))
-                .expect(&format!("List dir {} failed!", record_process.pid)) {
+                .unwrap_or_else(|_| panic!("List dir {} failed!", record_process.pid)) {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(_) => { 
@@ -276,8 +287,11 @@ fn monitor_thread(monitor_time: i64, monitor_iterval: i64,
             if process_stat_strs.len() > PROCESS_STAT_STIME_SHIFT {
                 let minflt = process_stat_strs[PROCESS_STAT_MINFLT_SHIFT].parse::<usize>().expect("minflt");
                 let majflt = process_stat_strs[PROCESS_STAT_MAJFLT_SHIFT].parse::<usize>().expect("majflt");
-                let utime = process_stat_strs[PROCESS_STAT_UTIME_SHIFT].parse::<f64>().expect("utime") / unsafe { libc::sysconf(libc::_SC_CLK_TCK) as f64 };
-                let stime = process_stat_strs[PROCESS_STAT_STIME_SHIFT].parse::<f64>().expect("stime") / unsafe { libc::sysconf(libc::_SC_CLK_TCK) as f64 };
+                // SAFETY:
+                // Safe because we've verified that the system call returns correctly
+                let clock_ticks = unsafe { sysconf(_SC_CLK_TCK) as f64 };
+                let utime = process_stat_strs[PROCESS_STAT_UTIME_SHIFT].parse::<f64>().expect("utime") / clock_ticks;
+                let stime = process_stat_strs[PROCESS_STAT_STIME_SHIFT].parse::<f64>().expect("stime") / clock_ticks;
                 record_item.minflt += minflt;
                 record_item.majflt += majflt;
                 record_item.utime += utime;
@@ -291,12 +305,6 @@ fn monitor_thread(monitor_time: i64, monitor_iterval: i64,
         }
         if !frist_flag {
             tmp_record_item = record_item.clone();
-            println!("{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{}",
-                    tmp_record_item.timestamp, tmp_record_item.pss, tmp_record_item.vm_rss, tmp_record_item.vm_anon, tmp_record_item.vm_file, tmp_record_item.vm_shmem,
-                    tmp_record_item.vm_swap, tmp_record_item.voluntary_ctxt_switches, tmp_record_item.nonvoluntary_ctxt_switches,
-                    tmp_record_item.minflt, tmp_record_item.majflt, tmp_record_item.utime, tmp_record_item.stime, tmp_record_item.totalcputime, tmp_record_item.global_utime,
-                    tmp_record_item.global_stime, tmp_record_item.global_total_cpu_time, tmp_record_item.cpu_occupancy_rate,
-                    tmp_record_item.priority, tmp_record_item.nice, tmp_record_item.num_threads, tmp_record_item.start_time);
             // Record difference
             tmp_record_item.majflt = record_item.majflt - last_record_item.majflt;
             tmp_record_item.minflt = record_item.minflt - last_record_item.minflt;
@@ -309,6 +317,13 @@ fn monitor_thread(monitor_time: i64, monitor_iterval: i64,
             tmp_record_item.totalcputime = record_item.totalcputime - last_record_item.totalcputime;
             tmp_record_item.global_total_cpu_time = record_item.global_total_cpu_time - last_record_item.global_total_cpu_time;
             tmp_record_item.cpu_occupancy_rate = tmp_record_item.totalcputime / tmp_record_item.global_total_cpu_time;
+            // Print current info
+            println!("{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.5},{},{},{},{}",
+                    tmp_record_item.timestamp, tmp_record_item.pss, tmp_record_item.vm_rss, tmp_record_item.vm_anon, tmp_record_item.vm_file, tmp_record_item.vm_shmem,
+                    tmp_record_item.vm_swap, tmp_record_item.voluntary_ctxt_switches, tmp_record_item.nonvoluntary_ctxt_switches,
+                    tmp_record_item.minflt, tmp_record_item.majflt, tmp_record_item.utime, tmp_record_item.stime, tmp_record_item.totalcputime, tmp_record_item.global_utime,
+                    tmp_record_item.global_stime, tmp_record_item.global_total_cpu_time, tmp_record_item.cpu_occupancy_rate,
+                    tmp_record_item.priority, tmp_record_item.nice, tmp_record_item.num_threads, tmp_record_item.start_time);
             record_process.record_infos.push(tmp_record_item);
         }
         frist_flag = false;
@@ -319,6 +334,7 @@ fn monitor_thread(monitor_time: i64, monitor_iterval: i64,
     dump_csv_info(&record_process, &monitor_process_name);
 }
 
+/// trace process
 pub fn trace_process(monitor_time: i64, monitor_iterval: i64,
         lists: &Vec<&str>) {
     let mut works: Vec<thread::JoinHandle<_>> = Vec::new();
@@ -329,12 +345,10 @@ pub fn trace_process(monitor_time: i64, monitor_iterval: i64,
             process_name)));
     }
     // Wait sub thread finish
-    let mut i: i32 = 0;
-    for t in works {
+    for (i, t) in (0_i32..).zip(works.into_iter()) {
         match t.join() {
             Ok(_) => { println!("Thread {} finish.", i) },
             Err(_) => { println!("Thread {} error!", i) },   
         }
-        i += 1;
     }
 }

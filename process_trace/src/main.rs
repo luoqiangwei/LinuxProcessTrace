@@ -8,6 +8,6 @@ pub use procutils::*;
 
 fn main() {
     // Modify this... To trace process
-    let monitor_list: Vec<&str> = vec!["init"];
+    let monitor_list: Vec<&str> = vec!["root@notty"];
     procutils::proc_analysis::trace_process(60, 10, &monitor_list);
 }

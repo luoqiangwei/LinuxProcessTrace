@@ -7,6 +7,7 @@
 use std::fs;
 use std::io;
 
+/// read a file
 pub fn read_path(path: &str) -> io::Result<String> {
     let result = fs::read_to_string(path)?;
     Ok(result)
