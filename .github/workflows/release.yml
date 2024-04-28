@@ -51,6 +51,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./path/to/your-asset.zip
-        asset_name: your-asset.zip
+        asset_path: processtrace-${{ github.ref_name }}.tar.gz
+        asset_name: processtrace-${{ github.ref_name }}-linux.zip
         asset_content_type: application/zip

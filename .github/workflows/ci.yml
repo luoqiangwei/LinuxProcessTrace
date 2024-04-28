@@ -1,0 +1,27 @@
+name: CI
+
+# 当向main分支推送时触发
+on:
+  push:
+    branches:
+      - '*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+
+    # 设置Rust环境
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+
+    # 添加构建步骤
+    - name: Build project
+      run: |
+        cargo build --release
+        echo "Build project here"
